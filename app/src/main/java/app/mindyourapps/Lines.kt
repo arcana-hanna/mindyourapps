@@ -36,7 +36,30 @@ object Lines {
         "Your timer ran out. Your call!",
     )
 
+    /**
+     * Wording for the "keep going until I leave" button. It changes every time on purpose, so it
+     * never turns into a button your thumb hits without reading.
+     */
+    val staying: List<String> = listOf(
+        "Don't bother me this session",
+        "This session will take a while",
+        "I'm not sure how long I'll be",
+        "Leave me be until I'm done here",
+        "No timer, I'll stop on my own",
+        "Let me stay without a reminder",
+        "I'll keep an eye on the time myself",
+        "No reminder, I've got this",
+    )
+
     private var last: String? = null
+    private var lastStaying: String? = null
+
+    fun pickStaying(): String {
+        val options = staying.filter { it != lastStaying }
+        val choice = options.random()
+        lastStaying = choice
+        return choice
+    }
 
     /** Random line from [pool], avoiding the same one twice in a row. */
     fun pick(pool: List<String>): String {

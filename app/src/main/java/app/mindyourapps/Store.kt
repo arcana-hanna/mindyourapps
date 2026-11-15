@@ -50,6 +50,15 @@ object Store {
     var lastCustomMin by mutableStateOf(20)
         private set
 
+    /** False until the first-launch flow has been finished (or skipped by existing users). */
+    var onboarded by mutableStateOf(false)
+        private set
+
+    fun finishOnboarding() {
+        onboarded = true
+        prefs.edit().putBoolean("onboarded", true).apply()
+    }
+
     @Synchronized
     fun init(context: Context) {
         if (ready) return
@@ -63,6 +72,8 @@ object Store {
         friendly = prefs.getBoolean("friendly", true)
         customLines = lines(prefs.getString("lines", ""))
         lastCustomMin = prefs.getInt("lastCustom", 20)
+        // People who already picked apps (earlier versions) don't see the first-launch flow.
+        onboarded = prefs.getBoolean("onboarded", false) || apps.isNotEmpty()
         val cutoff = today() - 60
         io.execute { db.prune(cutoff) }
         ready = true
@@ -88,6 +99,7 @@ object Store {
             .putString("apps", apps.joinToString("\n"))
             .putString("off", off.joinToString("\n"))
             .remove("msg_$pkg")
+            .remove("grant_$pkg")
             .apply()
     }
 
@@ -99,6 +111,23 @@ object Store {
     fun isEnabled(pkg: String): Boolean = pkg !in off
 
     fun isWatched(pkg: String): Boolean = pkg in apps && pkg !in off
+
+    // ---- running clocks -----------------------------------------------
+
+    /** Wall-clock end time of a "remind me in N minutes" you started, kept across restarts. */
+    fun saveGrant(pkg: String, untilWallMs: Long) {
+        prefs.edit().putLong("grant_$pkg", untilWallMs).apply()
+    }
+
+    fun clearGrant(pkg: String) {
+        prefs.edit().remove("grant_$pkg").apply()
+    }
+
+    fun savedGrants(): Map<String, Long> =
+        prefs.all
+            .filter { it.key.startsWith("grant_") && it.value is Long }
+            .map { it.key.removePrefix("grant_") to (it.value as Long) }
+            .toMap()
 
     fun message(pkg: String): String = prefs.getString("msg_$pkg", "") ?: ""
 

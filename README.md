@@ -2,16 +2,20 @@
 
 A tiny, private Android app that asks **"Are you sure?"** before you open the apps you choose.
 
-When you open a watched app, Mind Your Apps instantly covers it with a friendly check-in that shows how often you've opened it today and how long you've spent in it. Every choice is one tap:
+When you open a watched app, Mind Your Apps instantly covers it with a check-in that leads with **your numbers**: how many times you've opened it today and how long you've spent in it. Then one big choice and a few small ones:
 
 | Button | What happens |
 |---|---|
-| **∞** | Opens the app and doesn't ask again until you leave it |
+| **← Not now** | Leaves the app. Nothing is counted, so you can play the game of keeping your opens low |
 | **5 / 10 / 15 min** | Opens the app and checks in again after that long |
+| **Don't bother me this session** | Opens the app with no reminder. The wording changes every time so it stays a conscious choice |
 | **Custom time…** | Pick any number of minutes |
-| *Back / home gesture* | Leaves the app and goes home |
 
-- **Four looks:** classic blue, pastel, dark minimal, and a live blur of the app behind (Android 12+; falls back to a frosted tint).
+An open only counts once you continue into the app.
+
+The home screen shows a stacked 7-day chart of the time you spent in your minded apps (one color per app), with a toggle to see opens instead.
+
+- **Four looks:** classic blue and pastel follow your system light/dark setting; dark minimal and a live blur of the app behind (Android 12+, falls back to a frosted tint) are always dark.
 - **Friendly lines:** 20 built-in check-ins, picked at random. Add your own, or set a message per app.
 - **Private:** no internet permission, no account, no analytics. Everything stays on your phone.
 
@@ -19,10 +23,9 @@ When you open a watched app, Mind Your Apps instantly covers it with a friendly 
 
 1. Open the [latest release](../../releases/latest) on your phone and download the `.apk`.
 2. Open it and allow installs from your browser or file manager if Android asks.
-3. Open **Mind Your Apps** and tap **Open accessibility settings**, then switch on *Mind Your Apps*.
-4. Tap **+** and choose your apps.
+3. Open **Mind Your Apps**. It guides you in two steps: **pick your apps** (popular ones are suggested first), then **turn it on** with one switch in Android's accessibility settings. The app notices when you've done it.
 
-**Android 13+:** if the accessibility switch is greyed out, open the app's *App info* page, tap the three dots at the top right and choose **Allow restricted settings**. The app has a button that takes you there.
+**Android 13+:** if the accessibility switch is greyed out, the app shows how to allow restricted settings (App info, the three dots, *Allow restricted settings*) when you come back with it still off.
 
 To get updates automatically, add this repository to [Obtainium](https://github.com/ImranR98/Obtainium).
 

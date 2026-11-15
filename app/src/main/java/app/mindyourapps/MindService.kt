@@ -1,6 +1,7 @@
 package app.mindyourapps
 
 import android.accessibilityservice.AccessibilityService
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -34,6 +35,9 @@ class MindService : AccessibilityService() {
     companion object {
         const val INFINITE = -1
 
+        /** A short lock-screen break never ends an open-ended session; a longer one (over 15 minutes) does. */
+        private const val SCREEN_OFF_KEEP_MS = 15 * 60_000L
+
         @Volatile
         var instance: MindService? = null
 
@@ -63,13 +67,13 @@ class MindService : AccessibilityService() {
     private var fgPkg: String? = null
     private var sessionStart = 0L
     private var resumePending = false
+    private var screenOffAt = 0L
 
     private var overlay: PauseOverlay? = null
     private var overlayPkg: String? = null
 
     private val grants = HashMap<String, Grant>()
     private val timers = HashMap<String, Runnable>()
-    private val lastOpenCounted = HashMap<String, Long>()
 
     private var imePackages: Set<String> = emptySet()
     private var imeStamp = 0L
@@ -87,6 +91,7 @@ class MindService : AccessibilityService() {
         super.onServiceConnected()
         Store.init(this)
         instance = this
+        restoreGrants()
         if (!receiverRegistered) {
             ContextCompat.registerReceiver(
                 this,
@@ -150,10 +155,7 @@ class MindService : AccessibilityService() {
 
         val prev = fgPkg
         if (pkg == prev) {
-            if (resumePending) {
-                resumePending = false
-                enter(pkg)
-            }
+            if (resumePending) afterScreenOn(pkg)
             return
         }
 
@@ -166,6 +168,7 @@ class MindService : AccessibilityService() {
     private fun onScreenOff() {
         val p = fgPkg ?: return
         if (!resumePending) {
+            screenOffAt = now()
             leave(p)
             resumePending = true
         }
@@ -173,10 +176,23 @@ class MindService : AccessibilityService() {
 
     private fun onUnlocked() {
         val p = fgPkg ?: return
-        if (resumePending) {
-            resumePending = false
-            enter(p)
+        if (resumePending) afterScreenOn(p)
+    }
+
+    /**
+     * The screen is back on. Locking the phone for a while isn't "leaving" the app, so a short
+     * lock never ends a session. And nothing is shown on top of the lock screen: if the phone
+     * is still locked we wait for the unlock.
+     */
+    private fun afterScreenOn(pkg: String) {
+        val km = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        if (km.isKeyguardLocked) return // resumePending stays true until the unlock arrives
+        resumePending = false
+        val g = grants[pkg]
+        if (g != null && screenOffAt != 0L && now() - screenOffAt <= SCREEN_OFF_KEEP_MS) {
+            g.leftAt = 0L
         }
+        enter(pkg)
     }
 
     private fun enter(pkg: String) {
@@ -186,28 +202,33 @@ class MindService : AccessibilityService() {
         val n = now()
         val g = grants[pkg]
         if (g != null) {
+            val timed = g.until != Long.MAX_VALUE
             val away = if (g.leftAt == 0L) 0L else n - g.leftAt
-            if (away > Store.graceMs()) {
-                // Gone too long: this is a fresh visit.
-                grants.remove(pkg)
-                cancelTimer(pkg)
-            } else if (n < g.until) {
-                // Still allowed.
+
+            // The time you picked is a real clock. While it runs, leaving the app, switching
+            // apps or locking the phone never brings the check-in back. (An open-ended session
+            // is the exception: it ends once you've been away longer than the come-back window.)
+            if (n < g.until && (timed || away <= Store.graceMs())) {
                 g.leftAt = 0L
                 sessionStart = n
+                if (timed) schedule(pkg, g.until - n) // exact time left, even after the phone slept
                 return
-            } else {
-                // The time you picked ran out while you were away.
+            }
+
+            // Your time ran out a moment ago and you're still here: say so.
+            if (away <= Store.graceMs()) {
                 showOverlay(pkg, expired = true, countOpen = false, extraMs = 0L)
                 return
             }
+
+            // You've been gone a while: that was the end of the visit.
+            grants.remove(pkg)
+            cancelTimer(pkg)
+            Store.clearGrant(pkg)
         }
 
-        // A quick bounce back to an app you haven't answered yet isn't a new open.
-        val last = lastOpenCounted[pkg] ?: 0L
-        val count = last == 0L || n - last > Store.graceMs()
-        if (count) lastOpenCounted[pkg] = n
-        showOverlay(pkg, expired = false, countOpen = count, extraMs = 0L)
+        // Fresh visit. It is only counted as an open if you choose to continue.
+        showOverlay(pkg, expired = false, countOpen = true, extraMs = 0L)
     }
 
     private fun leave(pkg: String) {
@@ -221,7 +242,12 @@ class MindService : AccessibilityService() {
     private fun onTimer(pkg: String) {
         timers.remove(pkg)
         val g = grants[pkg] ?: return
-        if (fgPkg == pkg && !resumePending && now() >= g.until) {
+        if (now() < g.until) {
+            // fired a touch early (the phone slept): wait out the rest
+            schedule(pkg, g.until - now())
+            return
+        }
+        if (fgPkg == pkg && !resumePending) {
             var extra = 0L
             if (sessionStart != 0L) {
                 extra = now() - sessionStart
@@ -265,19 +291,28 @@ class MindService : AccessibilityService() {
         }
 
         val today = Store.stats(pkg, Store.today())
-        val opens = if (preview) 7 else today.opens + if (countOpen) 1 else 0
+        val opens = if (preview) 7 else today.opens
         val ms = if (preview) 42 * 60_000L else today.ms + extraMs
+        val nextOpen = if (countOpen || preview) opens + 1 else null
+        val systemDark = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
 
         val o = PauseOverlay(
             ctx = this,
             wm = windowManager,
             theme = Store.theme,
+            systemDark = systemDark,
             appLabel = label,
             icon = icon,
             headline = headline(pkg, label, expired),
-            stats = pauseStats(opens, ms),
+            opens = opens,
+            ms = ms,
+            nextOpen = nextOpen,
+            expired = expired,
+            stayLabel = Lines.pickStaying(),
             startCustom = Store.lastCustomMin,
-            onChoose = { minutes, custom -> choose(pkg, minutes, custom, preview) },
+            onChoose = { minutes, custom -> choose(pkg, minutes, custom, preview, countOpen) },
             onExit = { exit(preview) }
         )
         overlay = o
@@ -285,10 +320,7 @@ class MindService : AccessibilityService() {
         if (!o.show()) {
             overlay = null
             overlayPkg = null
-            return
         }
-        // Count after the screen is up so nothing delays it.
-        if (countOpen && !preview) Store.addOpen(pkg)
     }
 
     private fun headline(pkg: String, label: String, expired: Boolean): String {
@@ -302,16 +334,23 @@ class MindService : AccessibilityService() {
         }
     }
 
-    private fun choose(pkg: String, minutes: Int, custom: Boolean, preview: Boolean) {
+    private fun choose(pkg: String, minutes: Int, custom: Boolean, preview: Boolean, countOpen: Boolean) {
         hideOverlay()
         if (preview) return
         if (custom) Store.chooseLastCustom(minutes)
+        // Only now does it count as an open. Tapping "Not now" never does.
+        if (countOpen) Store.addOpen(pkg)
 
         val n = now()
         val until = if (minutes == INFINITE) Long.MAX_VALUE else n + minutes * 60_000L
         grants[pkg] = Grant(until)
         cancelTimer(pkg)
-        if (minutes != INFINITE) schedule(pkg, minutes * 60_000L)
+        if (minutes != INFINITE) {
+            schedule(pkg, minutes * 60_000L)
+            Store.saveGrant(pkg, System.currentTimeMillis() + minutes * 60_000L)
+        } else {
+            Store.clearGrant(pkg)
+        }
         if (fgPkg == pkg) sessionStart = n
     }
 
@@ -335,6 +374,19 @@ class MindService : AccessibilityService() {
         val r = Runnable { onTimer(pkg) }
         timers[pkg] = r
         handler.postDelayed(r, delayMs)
+    }
+
+    /** If Android restarted this service, the clocks you started are picked up again. */
+    private fun restoreGrants() {
+        val wall = System.currentTimeMillis()
+        val n = now()
+        for ((pkg, untilWall) in Store.savedGrants()) {
+            if (untilWall > wall) {
+                grants[pkg] = Grant(n + (untilWall - wall))
+            } else {
+                Store.clearGrant(pkg)
+            }
+        }
     }
 
     private fun cancelTimer(pkg: String) {
