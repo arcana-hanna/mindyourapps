@@ -2,21 +2,19 @@
 
 A tiny, private Android app that asks **"Are you sure?"** before you open the apps you choose.
 
-When you open a watched app, Mind Your Apps instantly covers it with a check-in that leads with **your numbers**: how many times you've opened it today and how long you've spent in it. Then one big choice and a few small ones:
+When you open a watched app, Mind Your Apps instantly covers it with a calm check-in that shows **your numbers**: the app's icon on the left, how many times you've opened it today on the right, and the total time you've spent in it today in the middle. No lectures, no text to read.
 
-| Button | What happens |
+| Control | What happens |
 |---|---|
-| **← Not now** | Leaves the app. Nothing is counted, so you can play the game of keeping your opens low |
-| **5 / 10 / 15 min** | Opens the app and checks in again after that long |
-| **Don't bother me this session** | Opens the app with no reminder. The wording changes every time so it stays a conscious choice |
-| **Custom time…** | Pick any number of minutes |
+| **Curved arrow** (big, under the logo) | Leaves the app. Nothing is counted, so you can play the game of keeping your opens low |
+| **10 min** (bottom right) | Opens the app and checks in again after that long. The time is your choice in *Settings → Reminder time* |
+| **No reminder** (bottom left) | Opens the app with no timer. The check-in comes back after you've left the app |
 
 An open only counts once you continue into the app.
 
 The home screen shows a stacked 7-day chart of the time you spent in your minded apps (one color per app), with a toggle to see opens instead.
 
 - **Four looks:** classic blue and pastel follow your system light/dark setting; dark minimal and a live blur of the app behind (Android 12+, falls back to a frosted tint) are always dark.
-- **Friendly lines:** 20 built-in check-ins, picked at random. Add your own, or set a message per app.
 - **Private:** no internet permission, no account, no analytics. Everything stays on your phone.
 
 ## Install
@@ -64,7 +62,6 @@ app/src/main/java/app/mindyourapps/
   MindService.kt    accessibility service: detects launches, timers, come-back window
   PauseOverlay.kt   the "Are you sure?" screen (plain views, so it appears instantly)
   PauseTheme.kt     the four looks
-  Lines.kt          friendly sentences
   Store.kt          settings, watched apps, daily opens and time
   MainActivity.kt   home, app picker, per-app stats, settings
 ```

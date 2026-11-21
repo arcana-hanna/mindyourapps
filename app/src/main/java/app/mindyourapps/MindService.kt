@@ -217,7 +217,7 @@ class MindService : AccessibilityService() {
 
             // Your time ran out a moment ago and you're still here: say so.
             if (away <= Store.graceMs()) {
-                showOverlay(pkg, expired = true, countOpen = false, extraMs = 0L)
+                showOverlay(pkg, countOpen = false, extraMs = 0L)
                 return
             }
 
@@ -228,7 +228,7 @@ class MindService : AccessibilityService() {
         }
 
         // Fresh visit. It is only counted as an open if you choose to continue.
-        showOverlay(pkg, expired = false, countOpen = true, extraMs = 0L)
+        showOverlay(pkg, countOpen = true, extraMs = 0L)
     }
 
     private fun leave(pkg: String) {
@@ -254,7 +254,7 @@ class MindService : AccessibilityService() {
                 Store.addTime(pkg, extra)
                 sessionStart = 0L
             }
-            showOverlay(pkg, expired = true, countOpen = false, extraMs = extra)
+            showOverlay(pkg, countOpen = false, extraMs = extra)
         }
     }
 
@@ -262,12 +262,11 @@ class MindService : AccessibilityService() {
 
     /** Used by the "preview" button in Settings. */
     fun showPreview() {
-        showOverlay(packageName, expired = false, countOpen = false, extraMs = 0L, preview = true)
+        showOverlay(packageName, countOpen = false, extraMs = 0L, preview = true)
     }
 
     private fun showOverlay(
         pkg: String,
-        expired: Boolean,
         countOpen: Boolean,
         extraMs: Long,
         preview: Boolean = false,
@@ -293,7 +292,6 @@ class MindService : AccessibilityService() {
         val today = Store.stats(pkg, Store.today())
         val opens = if (preview) 7 else today.opens
         val ms = if (preview) 42 * 60_000L else today.ms + extraMs
-        val nextOpen = if (countOpen || preview) opens + 1 else null
         val systemDark = (resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
@@ -305,14 +303,10 @@ class MindService : AccessibilityService() {
             systemDark = systemDark,
             appLabel = label,
             icon = icon,
-            headline = headline(pkg, label, expired),
             opens = opens,
             ms = ms,
-            nextOpen = nextOpen,
-            expired = expired,
-            stayLabel = Lines.pickStaying(),
-            startCustom = Store.lastCustomMin,
-            onChoose = { minutes, custom -> choose(pkg, minutes, custom, preview, countOpen) },
+            remindMin = Store.defaultMin,
+            onChoose = { minutes -> choose(pkg, minutes, preview, countOpen) },
             onExit = { exit(preview) }
         )
         overlay = o
@@ -323,22 +317,10 @@ class MindService : AccessibilityService() {
         }
     }
 
-    private fun headline(pkg: String, label: String, expired: Boolean): String {
-        val own = Store.message(pkg).trim()
-        if (own.isNotEmpty()) return own
-        if (!Store.friendly) return "Open $label?"
-        return if (expired) {
-            Lines.pick(Lines.timeUps + Store.customLines)
-        } else {
-            Lines.pick(Lines.greetings + Store.customLines)
-        }
-    }
-
-    private fun choose(pkg: String, minutes: Int, custom: Boolean, preview: Boolean, countOpen: Boolean) {
+    private fun choose(pkg: String, minutes: Int, preview: Boolean, countOpen: Boolean) {
         hideOverlay()
         if (preview) return
-        if (custom) Store.chooseLastCustom(minutes)
-        // Only now does it count as an open. Tapping "Not now" never does.
+        // Only now does it count as an open. The way-back arrow never does.
         if (countOpen) Store.addOpen(pkg)
 
         val n = now()

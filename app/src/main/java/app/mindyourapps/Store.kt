@@ -41,13 +41,8 @@ object Store {
     var graceSec by mutableStateOf(30)
         private set
 
-    var friendly by mutableStateOf(true)
-        private set
-
-    var customLines by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    var lastCustomMin by mutableStateOf(20)
+    /** Minutes for the right-hand button on the check-in. Changeable in Settings. */
+    var defaultMin by mutableStateOf(10)
         private set
 
     /** False until the first-launch flow has been finished (or skipped by existing users). */
@@ -69,9 +64,7 @@ object Store {
         off = lines(prefs.getString("off", "")).toSet()
         theme = PauseTheme.fromName(prefs.getString("theme", null))
         graceSec = prefs.getInt("grace", 30)
-        friendly = prefs.getBoolean("friendly", true)
-        customLines = lines(prefs.getString("lines", ""))
-        lastCustomMin = prefs.getInt("lastCustom", 20)
+        defaultMin = prefs.getInt("defaultMin", 10).coerceIn(1, 480)
         // People who already picked apps (earlier versions) don't see the first-launch flow.
         onboarded = prefs.getBoolean("onboarded", false) || apps.isNotEmpty()
         val cutoff = today() - 60
@@ -129,12 +122,6 @@ object Store {
             .map { it.key.removePrefix("grant_") to (it.value as Long) }
             .toMap()
 
-    fun message(pkg: String): String = prefs.getString("msg_$pkg", "") ?: ""
-
-    fun saveMessage(pkg: String, msg: String) {
-        prefs.edit().putString("msg_$pkg", msg.replace('\n', ' ')).apply()
-    }
-
     // ---- settings -----------------------------------------------------
 
     fun chooseTheme(t: PauseTheme) {
@@ -149,26 +136,9 @@ object Store {
 
     fun graceMs(): Long = graceSec * 1000L
 
-    fun useFriendly(on: Boolean) {
-        friendly = on
-        prefs.edit().putBoolean("friendly", on).apply()
-    }
-
-    fun addLine(line: String) {
-        val l = line.trim().replace('\n', ' ')
-        if (l.isEmpty() || l in customLines) return
-        customLines = customLines + l
-        prefs.edit().putString("lines", customLines.joinToString("\n")).apply()
-    }
-
-    fun removeLine(line: String) {
-        customLines = customLines - line
-        prefs.edit().putString("lines", customLines.joinToString("\n")).apply()
-    }
-
-    fun chooseLastCustom(min: Int) {
-        lastCustomMin = min
-        prefs.edit().putInt("lastCustom", min).apply()
+    fun chooseDefaultMin(min: Int) {
+        defaultMin = min
+        prefs.edit().putInt("defaultMin", min).apply()
     }
 
     // ---- stats --------------------------------------------------------

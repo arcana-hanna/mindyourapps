@@ -2,10 +2,15 @@ package app.mindyourapps
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -24,23 +29,26 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.graphics.PathParser
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
 /**
- * The "Are you sure?" screen. It is a plain window drawn by the accessibility service on top of
- * the app that was just opened, built from ordinary views so it appears instantly.
+ * The "Are you sure?" screen. A plain window drawn by the accessibility service on top of the
+ * app that was just opened, built from ordinary views so it appears instantly.
  *
- * The numbers come first (how often, how long), then the friendly line, then the choices:
+ *   [app icon]                              [opens today]
+ *                  [time today]
  *
- *   [ ←  Not now ]                         the big button: leave, nothing is counted
- *   [ 5 min ] [ 10 min ] [ 15 min ]        open it and ask me again after that long
- *   [ Don't bother me this session ]       open it, no timer (the wording changes every time)
- *   Custom time…                           any number of minutes
+ *                   (pause logo)
+ *                  [ curved arrow ]          <- the big button: leave, nothing is counted
  *
- * Back (or the home gesture) behaves like the big button.
+ *   [ No reminder ]            [ 10 min ]    <- open the app
+ *
+ * Back (or the home gesture) behaves like the curved arrow.
  */
 class PauseOverlay(
     private val ctx: Context,
@@ -49,24 +57,18 @@ class PauseOverlay(
     systemDark: Boolean,
     private val appLabel: String,
     private val icon: Drawable?,
-    private val headline: String,
     private val opens: Int,
     private val ms: Long,
-    /** The number this open would be if you continue, or null when nothing new would be counted. */
-    private val nextOpen: Int?,
-    private val expired: Boolean,
-    private val stayLabel: String,
-    startCustom: Int,
-    /** minutes (or [MindService.INFINITE]) and whether it came from the custom picker */
-    private val onChoose: (Int, Boolean) -> Unit,
+    /** Minutes for the right-hand button. */
+    private val remindMin: Int,
+    /** minutes, or [MindService.INFINITE] for "no reminder" */
+    private val onChoose: (Int) -> Unit,
     private val onExit: () -> Unit,
 ) {
 
     private val p: Palette = theme.palette(systemDark)
 
     private var root: FrameLayout? = null
-    private var panel: LinearLayout? = null
-    private var customValue: Int = startCustom.coerceIn(1, 480)
 
     private val blurOn: Boolean =
         theme.blur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && wm.isCrossWindowBlurEnabled
@@ -87,22 +89,20 @@ class PauseOverlay(
 
         val side = maxOf(dp(24), (ctx.resources.displayMetrics.widthPixels - dp(440)) / 2)
 
-        // Whole screen is one column: your numbers float in the upper part, the choices sit at
-        // the bottom where a thumb reaches them.
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(side, dp(40), side, dp(28))
+            setPadding(side, dp(24), side, dp(28))
         }
 
-        val top = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+        // ---- top: app icon on the left, number of opens on the right
+        val topRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
         }
-
-        // App
         val iconView = ImageView(ctx).apply {
             setImageDrawable(icon)
             scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = appLabel
             outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: Outline) {
                     outline.setRoundRect(0, 0, view.width, view.height, view.width * 0.22f)
@@ -110,29 +110,54 @@ class PauseOverlay(
             }
             clipToOutline = true
         }
-        top.addView(iconView, lp(dp(60), dp(60)))
-        top.addView(label(appLabel, 15f, p.subtext, medium), lp(WRAP, WRAP, top = 10))
+        topRow.addView(iconView, LinearLayout.LayoutParams(dp(52), dp(52)))
+        topRow.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
 
-        // Your numbers: the star of the screen
-        top.addView(statsCard(), lp(MATCH, WRAP, top = 22))
-        if (nextOpen != null) {
-            top.addView(
-                label("Opening it now makes it open #$nextOpen today", 14f, p.subtext),
-                lp(MATCH, WRAP, top = 12)
-            )
+        val opensBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
         }
+        opensBox.addView(
+            label("$opens", 36f, p.text, if (thin) regular else medium).apply { gravity = Gravity.END },
+            LinearLayout.LayoutParams(WRAP, WRAP)
+        )
+        opensBox.addView(
+            label(if (opens == 1) "open today" else "opens today", 13f, p.subtext).apply { gravity = Gravity.END },
+            LinearLayout.LayoutParams(WRAP, WRAP)
+        )
+        topRow.addView(opensBox, LinearLayout.LayoutParams(WRAP, WRAP))
+        col.addView(topRow, lp(MATCH, WRAP))
 
-        // The friendly line
-        val headlineView = label(headline, 20f, p.text, if (thin) regular else medium)
-        headlineView.setLineSpacing(0f, 1.1f)
-        top.addView(headlineView, lp(MATCH, WRAP, top = 26))
+        // ---- total time today, centred below
+        col.addView(label(fmtMinutes(ms), 52f, p.text, if (thin) regular else medium), lp(MATCH, WRAP, top = 8))
+        col.addView(label("spent today", 14f, p.subtext), lp(MATCH, WRAP, top = 0))
 
-        col.addView(top, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        // ---- middle: the logo, with the way back right under it
+        val middle = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
+        middle.addView(LogoView(ctx), LinearLayout.LayoutParams(dp(150), dp(150)))
+        middle.addView(backButton(), lp(MATCH, dp(76), top = 32))
+        col.addView(middle, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
-        // The choices
-        val choices = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        panel = choices
-        col.addView(choices, lp(MATCH, WRAP, top = 20))
+        // ---- bottom: the two ways in
+        val bottom = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        // Left (harder to reach with the thumb): no reminder at all.
+        bottom.addView(
+            button("No reminder", 16f, Color.TRANSPARENT, p.subtext, "Open the app without a reminder", outline = true) {
+                onChoose(MindService.INFINITE)
+            },
+            LinearLayout.LayoutParams(0, dp(56), 1f)
+        )
+        // Right: remind me after the fixed time chosen in Settings.
+        bottom.addView(
+            button("$remindMin min", 16f, p.secondary, p.onSecondary, "Open the app and remind me in $remindMin minutes") {
+                onChoose(remindMin)
+            },
+            LinearLayout.LayoutParams(0, dp(56), 1f).apply { leftMargin = dp(12) }
+        )
+        col.addView(bottom, lp(MATCH, WRAP, top = 8))
 
         val scroll = ScrollView(ctx).apply {
             isFillViewport = true
@@ -145,11 +170,9 @@ class PauseOverlay(
         // Keep clear of the status bar, camera cut-out and gesture bar.
         r.setOnApplyWindowInsetsListener { _, insets ->
             val (topInset, bottomInset) = verticalInsets(insets)
-            col.setPadding(side, dp(40) + topInset, side, dp(28) + bottomInset)
+            col.setPadding(side, dp(24) + topInset, side, dp(28) + bottomInset)
             insets
         }
-
-        showMain()
 
         // Fade in quickly. The buttons work from the very first frame, so this never delays you.
         r.alpha = 0f
@@ -224,158 +247,80 @@ class PauseOverlay(
         }
     }
 
-    // ------------------------------------------------------------------ numbers
+    // ------------------------------------------------------------------ drawn pieces
 
-    private fun statsCard(): View {
-        val m = (ms / 60_000L).toInt()
-        val timeValue = if (m < 60) "$m" else "${m / 60}h ${m % 60}m"
-        val timeCaption = if (m < 60) "min today" else "today"
-        val openCaption = if (opens == 1) "open today" else "opens today"
-
-        val row = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = rounded(p.card, 24)
-            setPadding(dp(8), dp(20), dp(8), dp(18))
+    /** The Mind Your Apps logo: the calm ring with the pause bars, on its blue-violet tile. */
+    private class LogoView(c: Context) : View(c) {
+        private val tile = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+            alpha = 153
         }
-        row.addView(stat("$opens", openCaption), LinearLayout.LayoutParams(0, WRAP, 1f))
-        row.addView(stat(timeValue, timeCaption), LinearLayout.LayoutParams(0, WRAP, 1f))
-        return row
+        private val bars = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        private val rect = RectF()
+
+        override fun onDraw(canvas: Canvas) {
+            val s = min(width, height).toFloat()
+            val ox = (width - s) / 2f
+            val oy = (height - s) / 2f
+
+            tile.shader = LinearGradient(
+                ox, oy, ox + s, oy + s,
+                0xFF6F9BFF.toInt(), 0xFFB49CFF.toInt(), Shader.TileMode.CLAMP
+            )
+            rect.set(ox, oy, ox + s, oy + s)
+            canvas.drawRoundRect(rect, s * 0.24f, s * 0.24f, tile)
+
+            val cx = ox + s / 2f
+            val cy = oy + s / 2f
+            val r = s * 0.31f
+            ring.strokeWidth = s * 0.04f
+            canvas.drawCircle(cx, cy, r, ring)
+
+            val barW = r * 0.41f
+            val barH = r * 1.04f
+            val gap = r * 0.15f
+            val radius = barW * 0.18f
+            rect.set(cx - gap / 2f - barW, cy - barH / 2f, cx - gap / 2f, cy + barH / 2f)
+            canvas.drawRoundRect(rect, radius, radius, bars)
+            rect.set(cx + gap / 2f, cy - barH / 2f, cx + gap / 2f + barW, cy + barH / 2f)
+            canvas.drawRoundRect(rect, radius, radius, bars)
+        }
     }
 
-    private fun stat(value: String, caption: String): View {
-        val c = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+    /** A curved arrow turning back to the left (the Material "undo" shape). */
+    private class UndoView(c: Context, tint: Int) : View(c) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = tint }
+        private val path: Path? = PathParser.createPathFromPathData(
+            "M12.5,8c-2.65,0 -5.05,0.99 -6.9,2.6L2,7v9h9l-3.62,-3.62c1.39,-1.16 3.16,-1.88 5.12,-1.88 " +
+                "3.54,0 6.55,2.31 7.6,5.5l2.37,-0.78C21.08,11.03 17.15,8 12.5,8z"
+        )
+
+        override fun onDraw(canvas: Canvas) {
+            val pth = path ?: return
+            val scale = min(width, height) / 24f
+            canvas.save()
+            canvas.translate((width - 24f * scale) / 2f, (height - 24f * scale) / 2f)
+            canvas.scale(scale, scale)
+            canvas.drawPath(pth, paint)
+            canvas.restore()
         }
-        c.addView(label(value, 46f, p.text, if (thin) regular else medium), LinearLayout.LayoutParams(WRAP, WRAP))
-        c.addView(label(caption, 14f, p.subtext), lp(WRAP, WRAP, top = 2))
-        return c
     }
 
-    // ------------------------------------------------------------------ panels
-
-    private fun showMain() {
-        val c = panel ?: return
-        c.removeAllViews()
-
-        // The big, obvious choice: change your mind. Nothing is counted.
-        c.addView(
-            button(
-                if (expired) "←  I'm done" else "←  Not now",
-                22f, p.primary, p.onPrimary,
-                if (expired) "Close the app" else "Don't open the app"
-            ) { onExit() },
-            lp(MATCH, dp(72))
-        )
-
-        c.addView(
-            label("or open it and remind me in", 13f, p.subtext),
-            lp(MATCH, WRAP, top = 22, bottom = 10)
-        )
-
-        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(5, 10, 15).forEachIndexed { i, m ->
-            val b = button("$m min", 16f, p.secondary, p.onSecondary, "Open and ask again in $m minutes") {
-                onChoose(m, false)
-            }
-            val params = LinearLayout.LayoutParams(0, dp(52), 1f)
-            if (i > 0) params.leftMargin = dp(10)
-            row.addView(b, params)
+    /** The big button: change your mind. No text, just the way back. Nothing is counted. */
+    private fun backButton(): View {
+        val b = FrameLayout(ctx).apply {
+            background = pill(p.primary, 24, false)
+            contentDescription = "Don't open the app"
+            isClickable = true
+            setOnClickListener { onExit() }
         }
-        c.addView(row, lp(MATCH, WRAP))
-
-        // Quiet option, with wording that changes every time so it stays a conscious choice.
-        c.addView(
-            button(stayLabel, 14f, Color.TRANSPARENT, p.subtext, "Open and don't remind me", outline = true) {
-                onChoose(MindService.INFINITE, false)
-            },
-            lp(MATCH, dp(48), top = 10)
+        b.addView(
+            UndoView(ctx, p.onPrimary),
+            FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER)
         )
-
-        val custom = label("Custom time…", 14f, p.subtext)
-        custom.paintFlags = custom.paintFlags or Paint.UNDERLINE_TEXT_FLAG
-        custom.setPadding(dp(18), dp(12), dp(18), dp(12))
-        custom.isClickable = true
-        custom.contentDescription = "Choose a custom time"
-        custom.setOnClickListener { showCustom() }
-        c.addView(custom, lp(WRAP, WRAP, top = 4).apply { gravity = Gravity.CENTER_HORIZONTAL })
-    }
-
-    private fun showCustom() {
-        val c = panel ?: return
-        c.removeAllViews()
-
-        c.addView(label("Open it and remind me in", 15f, p.subtext), lp(MATCH, WRAP, bottom = 12))
-
-        val valueView = label(fmtShort(customValue), 30f, p.text, medium)
-        fun refresh() {
-            valueView.text = fmtShort(customValue)
-        }
-
-        val stepper = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        stepper.addView(
-            button("−", 26f, p.secondary, p.onSecondary, "Less time") {
-                customValue = stepDown(customValue)
-                refresh()
-            },
-            LinearLayout.LayoutParams(dp(64), dp(64))
-        )
-        stepper.addView(valueView, LinearLayout.LayoutParams(0, WRAP, 1f))
-        stepper.addView(
-            button("+", 26f, p.secondary, p.onSecondary, "More time") {
-                customValue = stepUp(customValue)
-                refresh()
-            },
-            LinearLayout.LayoutParams(dp(64), dp(64))
-        )
-        c.addView(stepper, lp(MATCH, WRAP))
-
-        val chips = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(1, 2, 20, 30, 45, 60).forEachIndexed { i, m ->
-            val chip = button("$m", 15f, p.secondary, p.onSecondary, "$m minutes") {
-                customValue = m
-                refresh()
-            }
-            val params = LinearLayout.LayoutParams(0, dp(44), 1f)
-            if (i > 0) params.leftMargin = dp(8)
-            chips.addView(chip, params)
-        }
-        c.addView(chips, lp(MATCH, WRAP, top = 18))
-
-        c.addView(
-            button("Open it", 18f, p.primary, p.onPrimary, "Open the app and ask again later") {
-                onChoose(customValue, true)
-            },
-            lp(MATCH, dp(60), top = 20)
-        )
-
-        val back = label("Back", 14f, p.subtext)
-        back.paintFlags = back.paintFlags or Paint.UNDERLINE_TEXT_FLAG
-        back.setPadding(dp(18), dp(14), dp(18), dp(14))
-        back.isClickable = true
-        back.setOnClickListener { showMain() }
-        c.addView(back, lp(WRAP, WRAP, top = 8).apply { gravity = Gravity.CENTER_HORIZONTAL })
-    }
-
-    private fun stepUp(v: Int): Int = when {
-        v < 10 -> v + 1
-        v < 60 -> v + 5
-        else -> v + 15
-    }.coerceAtMost(480)
-
-    private fun stepDown(v: Int): Int = when {
-        v <= 10 -> v - 1
-        v <= 60 -> v - 5
-        else -> v - 15
-    }.coerceAtLeast(1)
-
-    private fun fmtShort(m: Int): String = when {
-        m < 60 -> "$m min"
-        m % 60 == 0 -> "${m / 60} h"
-        else -> "${m / 60} h ${m % 60} min"
+        return b
     }
 
     // ------------------------------------------------------------------ view helpers
@@ -412,17 +357,11 @@ class PauseOverlay(
         typeface = medium
         gravity = Gravity.CENTER
         setPadding(dp(12), 0, dp(12), 0)
-        background = pill(fill, if (outline) 16 else 18, outline)
+        background = pill(fill, 18, outline)
         contentDescription = description
         isClickable = true
         setOnClickListener { onClick() }
     }
-
-    private fun rounded(fill: Int, radiusDp: Int): Drawable =
-        GradientDrawable().apply {
-            setColor(fill)
-            cornerRadius = dp(radiusDp).toFloat()
-        }
 
     private fun pill(fill: Int, radiusDp: Int, outline: Boolean): Drawable {
         val radius = dp(radiusDp).toFloat()

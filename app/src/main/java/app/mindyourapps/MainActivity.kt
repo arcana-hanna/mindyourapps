@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -660,8 +661,6 @@ private fun PickRow(a: AppEntry) {
 private fun DetailScreen(pkg: String, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val week = remember(pkg) { Store.week(pkg) }
-    var msg by remember(pkg) { mutableStateOf(Store.message(pkg)) }
-    var more by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
     val label = appLabel(pkg)
 
@@ -719,21 +718,6 @@ private fun DetailScreen(pkg: String, onBack: () -> Unit) {
                     }
                 }
             }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { more = !more }) { Text(if (more) "Less" else "More") }
-                    if (more) {
-                        Text("Your own message for this app", fontWeight = FontWeight.SemiBold)
-                        OutlinedTextField(
-                            value = msg,
-                            onValueChange = { msg = it; Store.saveMessage(pkg, it) },
-                            placeholder = { Text("Leave empty for the friendly random lines") },
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -782,11 +766,11 @@ private fun ChartCard(title: String, data: List<Pair<Long, Float>>, summary: Str
 
 // ---------------------------------------------------------------------- settings
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val ctx = LocalContext.current
-    var newLine by remember { mutableStateOf("") }
     var more by remember { mutableStateOf(false) }
     var previewNote by remember { mutableStateOf(false) }
 
@@ -796,6 +780,27 @@ private fun SettingsScreen(onBack: () -> Unit) {
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 40.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+            item { SectionTitle("Reminder time") }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "The button on the right of the check-in opens the app and reminds you after this long.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(5, 10, 15, 20, 30, 45, 60).forEach { m ->
+                            Chip(label = "$m min", selected = Store.defaultMin == m) {
+                                Store.chooseDefaultMin(m)
+                            }
+                        }
+                    }
+                }
+            }
+
             item { SectionTitle("Look of the check-in") }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -836,38 +841,6 @@ private fun SettingsScreen(onBack: () -> Unit) {
                                     Store.chooseGrace(s)
                                 }
                             }
-                        }
-                    }
-                }
-
-                item { SectionTitle("Your own check-in lines") }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = newLine,
-                            onValueChange = { newLine = it },
-                            placeholder = { Text("Add a line") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.weight(1f),
-                        )
-                        Button(onClick = { Store.addLine(newLine); newLine = "" }, enabled = newLine.isNotBlank()) {
-                            Text("Add")
-                        }
-                    }
-                }
-                items(Store.customLines, key = { "c$it" }) { line ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainer)
-                            .padding(start = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(line, Modifier.weight(1f).padding(vertical = 10.dp), fontSize = 14.sp)
-                        IconButton(onClick = { Store.removeLine(line) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Remove")
                         }
                     }
                 }

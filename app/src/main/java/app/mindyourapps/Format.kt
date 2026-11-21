@@ -11,16 +11,6 @@ fun fmtMinutes(ms: Long): String {
     }
 }
 
-/** Text shown on the pause screen under the friendly line. */
-fun pauseStats(opens: Int, ms: Long): String {
-    val o = when {
-        opens <= 1 -> "Opened once today"
-        else -> "Opened $opens times today"
-    }
-    val t = if (ms < 60_000L) "less than a minute so far" else "${fmtMinutes(ms)} so far"
-    return "$o · $t"
-}
-
 /** Text shown in the app list. */
 fun listStats(opens: Int, ms: Long): String {
     val o = if (opens == 1) "1 open" else "$opens opens"
